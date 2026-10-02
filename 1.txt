@@ -1,1 +1,52 @@
-tempdata
+# Login
+Connect-AzAccount
+
+# Read VM names
+$VMNames = Get-Content "C:\Temp\VMNames.txt" |
+    Where-Object { -not [string]::IsNullOrWhiteSpace($_) } |
+    ForEach-Object { $_.Trim() }
+
+# Build Resource Graph query
+$NameList = ($VMNames | ForEach-Object {
+    "'$($_.Replace("'", "''"))'"
+}) -join ","
+
+$Query = @"
+Resources
+| where type =~ 'microsoft.compute/virtualmachines'
+| where name in ($NameList)
+| extend
+    OS_Publisher = tostring(properties.storageProfile.imageReference.publisher),
+    OS_Offer     = tostring(properties.storageProfile.imageReference.offer),
+    OS_SKU       = tostring(properties.storageProfile.imageReference.sku),
+    OS_Version   = tostring(properties.storageProfile.imageReference.version)
+| project
+    VMName = name,
+    SubscriptionId = subscriptionId,
+    ResourceGroup = resourceGroup,
+    Location = location,
+    OS_Publisher,
+    OS_Offer,
+    OS_SKU,
+    OS_Version,
+    ResourceId = id
+| order by VMName asc
+"@
+
+# Query Azure Resource Graph
+$Results = Search-AzGraph `
+    -Query $Query `
+    -First 1000
+
+# Display
+$Results.Data |
+    Format-Table VMName, SubscriptionId, ResourceGroup,
+                 Location, OS_Publisher, OS_Offer, OS_SKU, OS_Version `
+                 -AutoSize
+
+# Export
+$Results.Data |
+    Export-Csv "C:\Temp\VM_Image_Details.csv" `
+    -NoTypeInformation
+
+Write-Host "`nResults exported to C:\Temp\VM_Image_Details.csv"
