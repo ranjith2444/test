@@ -1,8 +1,11 @@
-# Login
-Connect-AzAccount
+# Azure Cloud Shell is already authenticated - no Connect-AzAccount needed.
+# Resolve paths relative to this script so it works on Linux Cloud Shell.
+$ScriptDir = if ($PSScriptRoot) { $PSScriptRoot } else { Get-Location }
+$NamesPath = Join-Path $ScriptDir 'VMNames.txt'
+$CsvPath   = Join-Path $ScriptDir 'VM_Image_Details.csv'
 
 # Read VM names
-$VMNames = Get-Content ".\VMNames.txt" |
+$VMNames = Get-Content $NamesPath |
     Where-Object { -not [string]::IsNullOrWhiteSpace($_) } |
     ForEach-Object { $_.Trim() }
 
@@ -60,7 +63,7 @@ $Results |
 
 # Export
 $Results |
-    Export-Csv ".\VM_Image_Details.csv" `
+    Export-Csv $CsvPath `
     -NoTypeInformation
 
-Write-Host "`nResults exported to .\VM_Image_Details.csv"
+Write-Host "`nResults exported to $CsvPath"
