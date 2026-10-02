@@ -2,7 +2,7 @@
 Connect-AzAccount
 
 # Read VM names
-$VMNames = Get-Content "C:\Temp\VMNames.txt" |
+$VMNames = Get-Content ".\VMNames.txt" |
     Where-Object { -not [string]::IsNullOrWhiteSpace($_) } |
     ForEach-Object { $_.Trim() }
 
@@ -33,20 +33,34 @@ Resources
 | order by VMName asc
 "@
 
-# Query Azure Resource Graph
-$Results = Search-AzGraph `
-    -Query $Query `
-    -First 1000
+# Query Azure Resource Graph (page through all results)
+$Results = @()
+$SkipToken = $null
+do {
+    if ($SkipToken) {
+        $Page = Search-AzGraph -Query $Query -First 1000 -SkipToken $SkipToken
+    }
+    else {
+        $Page = Search-AzGraph -Query $Query -First 1000
+    }
+    $Results += $Page
+    $SkipToken = $Page.SkipToken
+} while ($SkipToken)
+
+if (-not $Results -or $Results.Count -eq 0) {
+    Write-Warning "No VMs matched. Check VMNames.txt and that you are connected to the right subscription/tenant."
+    return
+}
 
 # Display
-$Results.Data |
+$Results |
     Format-Table VMName, SubscriptionId, ResourceGroup,
                  Location, OS_Publisher, OS_Offer, OS_SKU, OS_Version `
                  -AutoSize
 
 # Export
-$Results.Data |
-    Export-Csv "C:\Temp\VM_Image_Details.csv" `
+$Results |
+    Export-Csv ".\VM_Image_Details.csv" `
     -NoTypeInformation
 
-Write-Host "`nResults exported to C:\Temp\VM_Image_Details.csv"
+Write-Host "`nResults exported to .\VM_Image_Details.csv"
