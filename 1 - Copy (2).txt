@@ -1,0 +1,69 @@
+# Azure Cloud Shell is already authenticated - no Connect-AzAccount needed.
+# Resolve paths relative to this script so it works on Linux Cloud Shell.
+$ScriptDir = if ($PSScriptRoot) { $PSScriptRoot } else { Get-Location }
+$NamesPath = Join-Path $ScriptDir 'VMNames.txt'
+$CsvPath   = Join-Path $ScriptDir 'VM_Image_Details.csv'
+
+# Read VM names
+$VMNames = Get-Content $NamesPath |
+    Where-Object { -not [string]::IsNullOrWhiteSpace($_) } |
+    ForEach-Object { $_.Trim() }
+
+# Build Resource Graph query
+$NameList = ($VMNames | ForEach-Object {
+    "'$($_.Replace("'", "''"))'"
+}) -join ","
+
+$Query = @"
+Resources
+| where type =~ 'microsoft.compute/virtualmachines'
+| where name in ($NameList)
+| extend
+    OS_Publisher = tostring(properties.storageProfile.imageReference.publisher),
+    OS_Offer     = tostring(properties.storageProfile.imageReference.offer),
+    OS_SKU       = tostring(properties.storageProfile.imageReference.sku),
+    OS_Version   = tostring(properties.storageProfile.imageReference.version)
+| project
+    VMName = name,
+    SubscriptionId = subscriptionId,
+    ResourceGroup = resourceGroup,
+    Location = location,
+    OS_Publisher,
+    OS_Offer,
+    OS_SKU,
+    OS_Version,
+    ResourceId = id
+| order by VMName asc
+"@
+
+# Query Azure Resource Graph (page through all results)
+$Results = @()
+$SkipToken = $null
+do {
+    if ($SkipToken) {
+        $Page = Search-AzGraph -Query $Query -First 1000 -SkipToken $SkipToken
+    }
+    else {
+        $Page = Search-AzGraph -Query $Query -First 1000
+    }
+    $Results += $Page
+    $SkipToken = $Page.SkipToken
+} while ($SkipToken)
+
+if (-not $Results -or $Results.Count -eq 0) {
+    Write-Warning "No VMs matched. Check VMNames.txt and that you are connected to the right subscription/tenant."
+    return
+}
+
+# Display
+$Results |
+    Format-Table VMName, SubscriptionId, ResourceGroup,
+                 Location, OS_Publisher, OS_Offer, OS_SKU, OS_Version `
+                 -AutoSize
+
+# Export
+$Results |
+    Export-Csv $CsvPath `
+    -NoTypeInformation
+
+Write-Host "`nResults exported to $CsvPath"
