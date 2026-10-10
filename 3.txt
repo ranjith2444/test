@@ -1,1 +1,149 @@
 
+# Author: Mike Millar Date: 04/07/2022
+#
+# Usage:
+# 1. Analyze expiration status of the certs for App Services to start with
+#    .\Analyze-AppServiceCerts.ps1
+#
+#
+# Assumptoins:
+# -only one SSL binding per web app
+# 
+# 
+# 
+# Limitations:
+# 
+# 
+# 
+# 
+
+
+Param(
+    [switch]
+    [Alias('as')]
+    $uniquelist, 
+
+    [switch]
+    [Alias('gw')]
+    $configs,
+
+    [string]
+    [Alias('ap')] #app rpxy
+    $keywords = ''
+)
+
+# Start get-App-GWs
+
+function get-App-GWs($subscriptions) {
+    [System.Collections.ArrayList] $findings = @()
+
+    foreach($sub in $subscriptions) {
+        Write-Host " "
+        Set-AzContext -SubscriptionId $sub
+        		
+		# Converter: Changed Write-Host to Write-Verbose. Write-Host is not usable in PowerShell Workflow 
+		#Write-Verbose "Sub: $sub "
+		"Sub: $sub "
+		$subdetails = Get-AzContext
+
+
+        $resourceGroups = Get-AzResourceGroup
+
+        $index = 0
+        foreach ($rg in $resourceGroups) {
+             Write-Host "ResourceGroup:"  $rg.ResourceGroupName
+
+            #foreach($group in $groups) {
+                #Get-AzApplicationGateway -Name "ApplicationGateway01" -ResourceGroupName "ResourceGroup01"
+                $latestGWs = Get-AzApplicationGateway -ResourceGroupName $rg.ResourceGroupName
+                
+                #$latestCert = $group[0].Group[0]
+                 foreach($GW in $latestGWs) {
+                    #check gw for ssl certs, I have to decrypt public cert data
+                    $Certs = Get-AzApplicationGatewaySslCertificate -ApplicationGateway $GW
+                    If ($Certs){
+                                         
+                           
+                        foreach ($cert in $Certs){
+                            #$cert = $cert.Name
+                            Write-Host $GW.Name " : Processing cert: " $cert.Name
+                            #$HTTPsListenerSSLCert = ($AppGW.SslCertificatesText | ConvertFrom-Json) | Where-Object{$_.Id -eq $httpsListener.SslCertificate.id}
+                            if($cert.publicCertData){
+                                $certPublicData = [System.Security.Cryptography.X509Certificates.X509Certificate2]([System.Convert]::FromBase64String($cert.publicCertData.Substring(60, $cert.publicCertData.Length - 60)))
+                            }
+                            if($certPublicData){
+                                Write-Host $GW.Name " : cert has certPiblicData " $cert.Name
+                                $findings.Add([PSCustomObject] @{
+                      
+                                GWName = $GW.Name;
+                                ResourceGroupName = $rg.ResourceGroupName;
+                                # $certPublicData.FriendlyName;
+                            
+                                #CertIssuerName = $certPublicData.IssuerName;
+                                CertSubject = $certPublicData.Subject;
+                                ExpiryDate = $certPublicData.NotAfter.toString('yyyy-MM-dd');
+                                IssueDate = $certPublicData.NotBefore;
+                                #CertSubjectName = $certPublicData.SubjectName;
+                                CertIssuer = $certPublicData.Issuer;
+                        
+
+                                }) | Out-Null
+                            }else{
+                                Write-Host $GW.Name " : cert has no certPublicData " $cert.Name
+                            }
+
+                        }
+                       
+                       
+                    }else{
+
+                        Write-Host "No SSL certs " $GW.Name
+                        #$GWcert = "NULL"
+
+                    }
+                   
+                    
+                 }
+
+                
+            #}
+
+            #$progress = ++$index * 100 / $resourceGroups.Count
+            #Write-Progress -Activity "Enumerating resources.." -Status $rg.ResourceGroupName -CurrentOperation $sub.Name -PercentComplete $progress
+        }
+    }
+
+    Write-Host ''
+
+   
+
+    $findings | Sort-Object ExpiryDate, GWName | Format-Table  #-GroupBy Subscription
+    
+    #export
+
+     #$findings | Select GWName, ExpiryDate, ResourceGroupName, CertSubject, IssueDate, CertIssuer  | Export-CSV .\getAppGWCertsV1.csv -NoTypeInformation
+
+	$findings | Select GWName, ExpiryDate, ResourceGroupName, CertSubject, IssueDate, CertIssuer  |.\Upload-AzMonitorLog.ps1 -WorkspaceId '565e3844-7935-4b3d-80c0-173ae25bc05b' -WorkspaceKey 'S8rEEMtUDhpt1sELm1qKRbWH62oTCahzqALmz+plt2NfZN6zuv7/bORPdwdo8b7M+CtuX6A7hy1VfaUs9UDtgA==' -LogTypeName 'SSLCerts_GW_Test' -AddComputerName -AdditionalDataTaggingName "Notes" -AdditionalDataTaggingValue "Dashboard"
+}
+
+
+"Logging in to Azure..."
+Connect-AzAccount -Identity
+
+if (!(Get-AzContext)) {
+    Connect-AzAccount
+}
+
+
+$subs = @('68ffd97a-c112-4540-a9a4-e38af77d0626')
+
+# choose subscriptions
+#$subs = Get-AzSubscription | Out-GridView -Title 'Choose subscriptions' -PassThru
+#if ($subs.Count -eq 0) {
+#    Write-Host -ForegroundColor Yellow 'Please choose at least 1 subscription'
+#    exit
+#}
+
+ Write-Host "Getting $subs"
+ get-App-GWs -subscriptions $subs
+
