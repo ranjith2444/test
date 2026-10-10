@@ -1,1 +1,110 @@
 
+ Connect to Microsoft Graph
+  Connect-AzAccount -Identity  -ErrorAction Stop | Out-Null
+    $AccessToken = Get-AzAccessToken -ResourceUrl "https://graph.microsoft.com" -ErrorAction Stop 
+   
+   Connect-MgGraph -AccessToken ($AccessToken.Token | ConvertTo-SecureString -AsPlainText -Force) -ErrorAction Stop | Out-Null
+   
+ 
+# Connect to Microsoft Graph
+#Connect-MgGraph -Scopes "Application.Read.All", "Application.ReadWrite.All"
+ 
+# Get all applications
+$applications = Get-MgApplication -All
+ 
+# Initialize a list to store the data
+$data = @()
+ 
+# Get the current date, the date 30 days ago, and the date 30 days from now
+$currentDate = Get-Date
+$pastDate = $currentDate.AddDays(-30)
+$futureDate = $currentDate.AddDays(30)
+ 
+# Loop through each application and get details
+foreach ($app in $applications) {
+    $appId = $app.AppId
+    $appName = $app.DisplayName
+ 
+    # Get client secrets using the Microsoft Graph API
+    $secrets = Invoke-MgGraphRequest -Method GET -Uri "https://graph.microsoft.com/v1.0/applications/$($app.Id)/passwordCredentials"
+ 
+    foreach ($secret in $secrets.value) {
+        $endDate = if ($secret.endDateTime) { [DateTime]::Parse($secret.endDateTime) } else { $null }
+ 
+        # Check if the secret expired in the past 30 days or will expire in the next 30 days
+        if ($endDate -and ($endDate -ge $pastDate -and $endDate -le $futureDate)) {
+            $startDate = if ($secret.startDateTime) { [DateTime]::Parse($secret.startDateTime).ToString("yyyy-MM-dd") } else { "N/A" }
+            $endDateFormatted = $endDate.ToString("yyyy-MM-dd")
+ 
+            $data += [PSCustomObject]@{
+                ApplicationName = $appName
+                ApplicationId   = $appId
+                SecretId        = $secret.KeyId
+                StartDate       = $startDate
+                EndDate         = $endDateFormatted
+            }
+        }
+    }
+}
+#$null = Invoke-WebRequest -Uri 'https://advancedpersonnelmanagement.webhook.office.com/webhookb2/fc8f106b-048c-4253-a17a-15db3be307c2@fa7adf0d-de2d-4570-8f5f-4bca4772988f/IncomingWebhook/1daa09efe8f9434ca25edca5816630a9/3e552c92-97fc-4c0b-b257-a8407ddc6946/V2DtSCSNGb66hAme8rgcZdwLzeRSOgoh-l8ncwzwMsW1o1%27 ‑Method Post -Body %22test%22
+#Invoke-RestMethod -Method post -ContentType 'Application/Json' -Body '{"text":"Hello World!"}' -Uri 'https://advancedpersonnelmanagement.webhook.office.com/webhookb2/fc8f106b-048c-4253-a17a-15db3be307c2@fa7adf0d-de2d-4570-8f5f-4bca4772988f/IncomingWebhook/1daa09efe8f9434ca25edca5816630a9/3e552c92-97fc-4c0b-b257-a8407ddc6946/V2DtSCSNGb66hAme8rgcZdwLzeRSOgoh-l8ncwzwMsW1o1%27
+$data
+ 
+#region APISetup
+$cred = [System.Net.CredentialCache]::DefaultCredentials
+[System.Net.WebRequest]::DefaultWebProxy.Credentials = $cred 
+$FormattedDate = get-date -format "HH:mm dd/MM/yyyy"
+$Datefe = $FormattedDate + ""
+$user = "apm.admin"
+$pass = "&Yhf,D7hRX/&y[Qa"
+# Build auth header
+$base64AuthInfo = [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes(("{0}:{1}" -f $user, $pass)))
+[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+$Global:headers = New-Object "System.Collections.Generic.Dictionary[[String],[String]]"
+$Global:headers.Add('Authorization',('Basic {0}' -f $base64AuthInfo))
+$Global:headers.Add('Accept','text/xml')
+$Global:headers.Add('Content-Type','text/xml')
+#endregion
+ 
+        $uri = "https://apmprod.service-now.com/api/now/table/incident?sysparm_display_value=all"
+ 
+        # Specify HTTP method
+        $method = "post"
+ 
+        # Specify request body
+        $body = "<request>
+                    <entry>
+                        <u_type>Incident</u_type>
+                        <short_description>ClientSecret expired past 30 days or expiring in next 30 days </short_description>
+                        <contact_type>Self-Service</contact_type>
+                        <u_business_service>5246ace5dba63e009d6575a9bf9619b6</u_business_service>
+                        <u_requestor>infrastructurereport infrastructurereport</u_requestor>
+                        
+                    </entry>
+                </request>"
+ 
+        # Send HTTP request
+        [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+ 
+        $response = Invoke-WebRequest -Headers $Global:headers -Method $method -Uri $uri -Body $body -UseBasicParsing
+ 
+        # Get Response details
+        $xmlcontent = [xml]$response.Content
+        $state = $xmlcontent.response.result.state.value  
+        $sys_id = $xmlcontent.response.result.sys_id.value
+ 
+ 
+        #Update content
+        $WorkNotes = "[code]"
+        $WorkNotes += $data|ConvertTo-Html  -Fragment -As List
+        $WorkNotes += "[/code]"
+        $Body = [pscustomobject]@{
+            work_notes = $WorkNotes
+        }        
+ 
+        #Add Content
+        $uri = "https://apmprod.service-now.com/api/now/table/incident/$($sys_id)"
+        $method = "patch"
+        $body = $Body|ConvertTo-Json   
+ 
+        $response = Invoke-WebRequest -Headers $Global:headers -Method $method -Uri $uri -Body $body -ContentType "application/json"  -UseBasicParsing
