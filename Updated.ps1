@@ -1,4 +1,3 @@
-
 # Full Key Vault URL, e.g. https://my-keyvault.vault.azure.net/
 $KeyVaultUrl = "https://my-keyvault.vault.azure.net/"
 
@@ -15,48 +14,6 @@ $ErrorActionPreference = 'Stop'
 
 # Get-AzKeyVaultSecret expects the short vault name, so derive it from the URL.
 $KeyVaultName = ([System.Uri]$KeyVaultUrl).Host.Split('.')[0]
-
-function Invoke-ServiceNowRequest {
-    <#
-        Wraps Invoke-WebRequest for ServiceNow, enforces TLS 1.2, and validates the HTTP status
-        code so a failed call throws instead of silently continuing.
-    #>
-    param(
-        [Parameter(Mandatory)][string]$Uri,
-        [Parameter(Mandatory)][ValidateSet('Get', 'Post', 'Patch', 'Put')][string]$Method,
-        [Parameter(Mandatory)][System.Collections.IDictionary]$Headers,
-        [string]$Body,
-        [string]$ContentType,
-        [int[]]$ExpectedStatusCodes = @(200, 201)
-    )
-
-    [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-
-    $params = @{
-        Uri             = $Uri
-        Method          = $Method
-        Headers         = $Headers
-        UseBasicParsing = $true
-        ErrorAction     = 'Stop'
-    }
-    if ($PSBoundParameters.ContainsKey('Body'))     { $params.Body = $Body }
-    if (-not [string]::IsNullOrEmpty($ContentType)) { $params.ContentType = $ContentType }
-
-    try {
-        $response = Invoke-WebRequest @params
-    }
-    catch {
-        $status = $null
-        if ($_.Exception.Response) { $status = [int]$_.Exception.Response.StatusCode }
-        throw "ServiceNow $Method '$Uri' failed (HTTP $status): $($_.Exception.Message)"
-    }
-
-    if ($ExpectedStatusCodes -notcontains [int]$response.StatusCode) {
-        throw "ServiceNow $Method '$Uri' returned unexpected HTTP $([int]$response.StatusCode)."
-    }
-
-    return $response
-}
 
 # Connect to Azure using the managed identity, then exchange for a Microsoft Graph token.
 Connect-AzAccount -Identity -ErrorAction Stop | Out-Null
@@ -153,7 +110,12 @@ $Global:headers.Add('Content-Type','text/xml')
         # Send HTTP request
         [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
  
-        $response = Invoke-ServiceNowRequest -Uri $uri -Method 'Post' -Body $body -Headers $Global:headers -ExpectedStatusCodes @(200, 201)
+        $response = Invoke-WebRequest -Headers $Global:headers -Method $method -Uri $uri -Body $body -UseBasicParsing
+
+        # Validate the incident-creation request succeeded
+        if ($response.StatusCode -ne 200 -and $response.StatusCode -ne 201) {
+            throw "ServiceNow incident creation failed with HTTP $($response.StatusCode)."
+        }
  
         # Get Response details
         $xmlcontent = [xml]$response.Content
@@ -178,7 +140,12 @@ $Global:headers.Add('Content-Type','text/xml')
         $method = "patch"
         $body = $Body|ConvertTo-Json   
  
-        $response = Invoke-ServiceNowRequest -Uri $uri -Method 'Patch' -Body $body -Headers $Global:headers -ContentType "application/json" -ExpectedStatusCodes @(200)
+        $response = Invoke-WebRequest -Headers $Global:headers -Method $method -Uri $uri -Body $body -ContentType "application/json" -UseBasicParsing
+
+        # Validate the work-notes update succeeded
+        if ($response.StatusCode -ne 200) {
+            throw "ServiceNow incident update failed with HTTP $($response.StatusCode)."
+        }
         
         # Get Response details after update
         $xmlcontent = [xml]$response.Content
